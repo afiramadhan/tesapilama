@@ -1,0 +1,154 @@
+import os
+import re
+import pandas as pd
+import openai
+import json
+
+# Step 3: Set up your API key
+os.environ['OPENAI_API_KEY'] = ''
+openai.api_key = os.getenv('OPENAI_API_KEY')
+
+# Function to read tickers from CSV
+def read_tickers_from_csv(csv_filename):
+    df = pd.read_csv(csv_filename)
+    return df.set_index('number')['ticker'].to_dict()
+
+# Read tickers from the CSV file
+ticker_mapping = read_tickers_from_csv('numbered_from_smallest_modified.csv')  # Adjust the path as necessary
+print("Tickers loaded from CSV:", ticker_mapping)
+
+# Input the number corresponding to the ticker
+numbers = input("Enter the number(s) corresponding to the ticker(s), separated by comma: ")
+numbers = [int(num.strip()) for num in numbers.split(",")]
+
+# Get the ticker corresponding to the input number
+tickers = [ticker_mapping.get(num) for num in numbers]
+
+# Check if the ticker exists
+for ticker in tickers:
+    if not ticker:
+        print("Ticker not found.")
+    else:
+        # Define Fintech Keywords
+        fintech_keywords = [
+            "Technology", "Digital Banking", "Network", "Internet Banking",
+            "Online Services", "FinTech", "AI", "Blockchain", "E-payment", "Mobile Banks"
+        ]
+
+        # Define Negative Patterns
+        negative_patterns = re.compile(r'\b(no|none)\b', re.IGNORECASE)
+
+        print("Step 1: Keywords and patterns defined.")
+
+        def load_text(file_path):
+            with open(file_path, 'r', encoding='utf-8') as file:
+                return file.read()
+
+        print("Step 2: Function to load text defined.")
+
+        # Function to extract sentences containing fintech-related keywords
+        def extract_sentences_with_keywords(text, keywords):
+            sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|\?)\s', text)
+            keyword_sentences = [sentence.strip() for sentence in sentences if any(keyword in sentence for keyword in keywords)]
+            return keyword_sentences
+
+        print("Step 3: Function to extract sentences with fintech keywords defined.")
+
+        # Function to classify sentences using OpenAI GPT-4 model
+        def classify_sentences_with_gpt(sentences):
+            results = []
+            for sentence in sentences:
+                prompt = f"""
+                Please classify the following sentence based on its relevance to fintech.
+                Sentence: {sentence}
+                Respond in json format with three keys “classification”, “probability score” and “Reasons”.
+                """
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5",  # Adjust model name if using a different model
+                    prompt=prompt,
+                    max_tokens=150,
+                    n=1,
+                    stop=None,
+                    temperature=0.7
+                )
+                response_text = response['choices'][0]['text'].strip()
+                result = json.loads(response_text)
+
+                result_dict = {
+                    'sentence': sentence,
+                    'classification': result['classification'],
+                    'probability score': result['probability score'],
+                    'Reasons': result['Reasons']
+                }
+                results.append(result_dict)
+
+            return results
+
+        print("Step 4: Function to classify sentences with ChatGPT defined.")
+
+        # Function to clean negative occurrences
+        def clean_negative_occurrences(text):
+            return re.sub(negative_patterns, '', text)
+
+        print("Step 5: Function to clean negative occurrences defined.")
+
+        # Processing files and capturing context
+        def process_files(directory, keywords):
+            results = []
+            print("Step 6: Processing files and capturing context.")
+
+            # Check if directory exists
+            if not os.path.exists(directory):
+                print(f"Error: The directory '{directory}' does not exist.")
+                return results
+
+            for filename in os.listdir(directory):
+                if filename.endswith(".txt"):
+                    file_path = os.path.join(directory, filename)
+                    print(f"Processing file: {file_path}")
+                    text = load_text(file_path)
+                    text_cleaned = clean_negative_occurrences(text)
+                    sentences_with_keywords = extract_sentences_with_keywords(text_cleaned, keywords)
+                    
+                    # Classify sentences with OpenAI GPT-4
+                    if sentences_with_keywords:
+                        sentence_classifications = classify_sentences_with_gpt(sentences_with_keywords)
+                        
+                        # Store the results
+                        base_filename = os.path.splitext(filename)[0]
+                        current_ticker, report_date = base_filename.split('_')
+                        for classification in sentence_classifications:
+                            result = {
+                                'Company': current_ticker,
+                                'Report Date': report_date,
+                                'Sentence': classification['sentence'],
+                                'Classification': classification['classification'],
+                                'Probability Score': classification['probability score'],
+                                'Reasons': classification['Reasons']
+                            }
+                            results.append(result)
+                        print("Processing completed.")
+
+            return results
+
+        print("Step 7: Function to process files and capturing context defined.")
+
+        # Function to save results to CSV
+        def save_to_csv(results, ticker, output_filename):
+            df = pd.DataFrame(results)
+            df.to_csv(output_filename, index=False)
+            print(f"Data successfully saved to {output_filename}")
+
+        print("Step 8: Function to save results to CSV defined.")
+        print("\n")
+
+        # Set the directory dynamically based on the ticker
+        directory = f"downloaded_filings_{ticker}"
+
+        # Process the text files
+        results = process_files(directory, fintech_keywords)
+
+        if results:
+            # Save the results to a CSV file with a dynamic name based on the ticker symbol
+            csv_filename = f"fintech_analysis_{ticker}.csv"
+            save_to_csv(results, ticker, csv_filename)
